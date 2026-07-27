@@ -1,0 +1,9 @@
+*.exe
+*.test
+*.out
+
+/vendor/
+
+.idea/
+
+.vscode/
