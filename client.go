@@ -3,8 +3,11 @@ package satgo
 import (
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
+	"fmt"
+	"net/http"
 	"os"
 	"time"
 
@@ -21,18 +24,21 @@ type Client struct {
 	credentials Credentials
 	token       string
 	expiresAt   time.Time
+	HTTPClient  *http.Client
 }
 
-func newClient(cert *x509.Certificate, key *rsa.PrivateKey) *Client {
+func newClient(cert *x509.Certificate, key *rsa.PrivateKey, rfc string) *Client {
 	return &Client{
 		credentials: Credentials{
 			Certificate: cert,
 			PrivateKey:  key,
+			RFC:         rfc,
 		},
+		HTTPClient: &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
-func NewClientFromPEM(certPEM, keyPEM []byte) (*Client, error) {
+func NewClientFromPEM(certPEM, keyPEM []byte, rfc string) (*Client, error) {
 
 	certBlock, _ := pem.Decode(certPEM)
 	if certBlock == nil {
@@ -59,10 +65,10 @@ func NewClientFromPEM(certPEM, keyPEM []byte) (*Client, error) {
 		return nil, errors.New("private key is not RSA")
 	}
 
-	return newClient(cert, rsaKey), nil
+	return newClient(cert, rsaKey, rfc), nil
 }
 
-func NewClientFromFiles(certPath, keyPath, password string) (*Client, error) {
+func NewClientFromFiles(certPath, keyPath, password string, rfc string) (*Client, error) {
 
 	certDER, err := os.ReadFile(certPath)
 	if err != nil {
@@ -84,7 +90,7 @@ func NewClientFromFiles(certPath, keyPath, password string) (*Client, error) {
 		return nil, err
 	}
 
-	return newClient(cert, key), nil
+	return newClient(cert, key, rfc), nil
 }
 
 func parsePrivateKeyDER(data []byte, password string) (*rsa.PrivateKey, error) {
@@ -106,4 +112,228 @@ func parseCertificateDER(data []byte) (*x509.Certificate, error) {
 	return x509.ParseCertificate(data)
 }
 
-//func (c *Client) authenticateIfNeeded() error
+func (c *Client) RFC() string {
+	return c.credentials.RFC
+}
+
+func (c *Client) Verificacion(IdSolicitud string, RfcSolicitante string) (string, error) {
+	if err := c.authenticateIfNeeded(); err != nil {
+		return "", err
+	}
+	return "", errors.New("función no implementada aún")
+}
+
+// SolicitarDescargaCFDI pide el paquete masivo
+func (c *Client) Descarga(IdSolicitud string, RfcSolicitante string) (string, error) {
+	if err := c.authenticateIfNeeded(); err != nil {
+		return "", err
+	}
+	return "", errors.New("función no implementada aún")
+}
+
+func (c *Client) autenticar() (string, time.Time, error) {
+	now := time.Now().UTC()
+	created := now.Format("2006-01-02T15:04:05.000Z")
+	expirestime := now.Add(5 * time.Minute)
+	expires := expirestime.Format("2006-01-02T15:04:05.000Z")
+	uuidStr := generarUUID()
+
+	// 1. Crear el Timestamp Canonicalizado
+	canonicalTimestamp := `<u:Timestamp xmlns:u="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd" u:Id="_0">` +
+		`<u:Created>` + created + `</u:Created>` +
+		`<u:Expires>` + expires + `</u:Expires>` +
+		`</u:Timestamp>`
+
+	// Reciclamos el helper para calcular el hash del timestamp de forma limpia
+	digestValue := calculateDigest(canonicalTimestamp)
+
+	// 2. Crear el SignedInfo Canonicalizado para WSS
+	canonicalSignedInfo := `<SignedInfo xmlns="http://www.w3.org/2000/09/xmldsig#">` +
+		`<CanonicalizationMethod Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"></CanonicalizationMethod>` +
+		`<SignatureMethod Algorithm="http://www.w3.org/2000/09/xmldsig#rsa-sha1"></SignatureMethod>` +
+		`<Reference URI="#_0">` +
+		`<Transforms>` +
+		`<Transform Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"></Transform>` +
+		`</Transforms>` +
+		`<DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1"></DigestMethod>` +
+		`<DigestValue>` + digestValue + `</DigestValue>` +
+		`</Reference>` +
+		`</SignedInfo>`
+
+	// 3. Firmar usando nuestro nuevo método universal
+	signatureValue, err := signRSA(c.credentials.PrivateKey, canonicalSignedInfo)
+	if err != nil {
+		return "", expirestime, fmt.Errorf("error firmando la solicitud de autenticación: %v", err)
+	}
+
+	certBase64 := base64.StdEncoding.EncodeToString(c.credentials.Certificate.Raw)
+
+	// 4. Ensamblar la petición SOAP final
+	soapRequest := `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" xmlns:u="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd">` +
+		`<s:Header>` +
+		`<o:Security s:mustUnderstand="1" xmlns:o="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">` +
+		canonicalTimestamp +
+		`<o:BinarySecurityToken u:Id="` + uuidStr + `" ValueType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-x509-token-profile-1.0#X509v3" EncodingType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary">` +
+		certBase64 +
+		`</o:BinarySecurityToken>` +
+		`<Signature xmlns="http://www.w3.org/2000/09/xmldsig#">` +
+		canonicalSignedInfo +
+		`<SignatureValue>` + signatureValue + `</SignatureValue>` +
+		`<KeyInfo>` +
+		`<o:SecurityTokenReference>` +
+		`<o:Reference ValueType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-x509-token-profile-1.0#X509v3" URI="#` + uuidStr + `" />` +
+		`</o:SecurityTokenReference>` +
+		`</KeyInfo>` +
+		`</Signature>` +
+		`</o:Security>` +
+		`</s:Header>` +
+		`<s:Body>` +
+		`<Autentica xmlns="http://DescargaMasivaTerceros.gob.mx" />` +
+		`</s:Body>` +
+		`</s:Envelope>`
+	token, err := c.enviarAutenticacion(soapRequest)
+
+	return token, expirestime, err
+}
+
+func (c *Client) SolicitudEmitidos(uuid string, rfcSolicitante string, tipoSolicitud string, folio string) (string, error) {
+	if err := c.authenticateIfNeeded(); err != nil {
+		return "", err
+	}
+	// 1. Definir los atributos (El map en Go no tiene orden fijo, pero buildCanonicalXML lo ordenará)
+	atributos := map[string]string{
+		"RfcSolicitante": rfcSolicitante,
+		"Folio":          uuid,
+	}
+
+	// 2. Generar el nodo canónico (Inner XML vacío porque Folio va como atributo ahora)
+	nodoSolicitud := buildCanonicalXML(atributos, "")
+
+	// 3. Preparar el string exacto para el Hash
+	nodoParaHash := fmt.Sprintf(`<des:SolicitaDescargaFolio xmlns:des="http://DescargaMasivaTerceros.sat.gob.mx">%s</des:SolicitaDescargaFolio>`, nodoSolicitud)
+
+	// 4. Calcular el Hash (DigestValue)
+	digestValue := calculateDigest(nodoParaHash)
+
+	// 5. Generar y firmar el SignedInfo
+	signedInfo := buildSignedInfo(digestValue)
+	signatureValue, err := signRSA(c.credentials.PrivateKey, signedInfo)
+	if err != nil {
+		return "", fmt.Errorf("error al firmar por folio: %v", err)
+	}
+
+	// 6. Obtener datos del certificado para el KeyInfo
+	certBase64 := base64.StdEncoding.EncodeToString(c.credentials.Certificate.Raw)
+	issuerName := c.credentials.Certificate.Issuer.String()
+	serialNumber := c.credentials.Certificate.SerialNumber.String()
+
+	// 7. Ensamblar SOAP final
+	soapFinal := buildSoapEnvelope("SolicitaDescargaFolio", nodoSolicitud, signedInfo, signatureValue, certBase64, issuerName, serialNumber)
+
+	// 8. Aquí enviarías la petición HTTP usando c.HTTPClient, c.Token y soapFinal...
+	// (Queda pendiente crear el helper enviarPeticionNegocio)
+	fmt.Println(soapFinal)
+
+	return "Simulación exitosa", nil
+}
+
+func (c *Client) SolicitudRecibidos(uuid string, tipoSolicitud string, folio string) (string, error) {
+	if err := c.authenticateIfNeeded(); err != nil {
+		return "", err
+	}
+	// 1. Definir los atributos (El map en Go no tiene orden fijo, pero buildCanonicalXML lo ordenará)
+	atributos := map[string]string{
+		"RfcSolicitante": c.credentials.RFC,
+		"Folio":          uuid,
+	}
+
+	// 2. Generar el nodo canónico (Inner XML vacío porque Folio va como atributo ahora)
+	nodoSolicitud := buildCanonicalXML(atributos, "")
+
+	// 3. Preparar el string exacto para el Hash
+	nodoParaHash := fmt.Sprintf(`<des:SolicitaDescargaFolio xmlns:des="http://DescargaMasivaTerceros.sat.gob.mx">%s</des:SolicitaDescargaFolio>`, nodoSolicitud)
+
+	// 4. Calcular el Hash (DigestValue)
+	digestValue := calculateDigest(nodoParaHash)
+
+	// 5. Generar y firmar el SignedInfo
+	signedInfo := buildSignedInfo(digestValue)
+	signatureValue, err := signRSA(c.credentials.PrivateKey, signedInfo)
+	if err != nil {
+		return "", fmt.Errorf("error al firmar por folio: %v", err)
+	}
+
+	// 6. Obtener datos del certificado para el KeyInfo
+	certBase64 := base64.StdEncoding.EncodeToString(c.credentials.Certificate.Raw)
+	issuerName := c.credentials.Certificate.Issuer.String()
+	serialNumber := c.credentials.Certificate.SerialNumber.String()
+
+	// 7. Ensamblar SOAP final
+	soapFinal := buildSoapEnvelope("SolicitaDescargaFolio", nodoSolicitud, signedInfo, signatureValue, certBase64, issuerName, serialNumber)
+
+	// 8. Aquí enviarías la petición HTTP usando c.HTTPClient, c.Token y soapFinal...
+	// (Queda pendiente crear el helper enviarPeticionNegocio)
+	fmt.Println(soapFinal)
+
+	return "Simulación exitosa", nil
+}
+
+func (c *Client) SolicitudFolio(uuid string, rfcSolicitante string, tipoSolicitud string, folio string) (string, error) {
+	if err := c.authenticateIfNeeded(); err != nil {
+		return "", err
+	}
+	// 1. Definir los atributos (El map en Go no tiene orden fijo, pero buildCanonicalXML lo ordenará)
+	atributos := map[string]string{
+		"RfcSolicitante": c.credentials.RFC,
+		"Folio":          uuid,
+	}
+
+	// 2. Generar el nodo canónico (Inner XML vacío porque Folio va como atributo ahora)
+	nodoSolicitud := buildCanonicalXML(atributos, "")
+
+	// 3. Preparar el string exacto para el Hash
+	nodoParaHash := fmt.Sprintf(`<des:SolicitaDescargaFolio xmlns:des="http://DescargaMasivaTerceros.sat.gob.mx">%s</des:SolicitaDescargaFolio>`, nodoSolicitud)
+
+	// 4. Calcular el Hash (DigestValue)
+	digestValue := calculateDigest(nodoParaHash)
+
+	// 5. Generar y firmar el SignedInfo
+	signedInfo := buildSignedInfo(digestValue)
+	signatureValue, err := signRSA(c.credentials.PrivateKey, signedInfo)
+	if err != nil {
+		return "", fmt.Errorf("error al firmar por folio: %v", err)
+	}
+
+	// 6. Obtener datos del certificado para el KeyInfo
+	certBase64 := base64.StdEncoding.EncodeToString(c.credentials.Certificate.Raw)
+	issuerName := c.credentials.Certificate.Issuer.String()
+	serialNumber := c.credentials.Certificate.SerialNumber.String()
+
+	// 7. Ensamblar SOAP final
+	soapFinal := buildSoapEnvelope("SolicitaDescargaFolio", nodoSolicitud, signedInfo, signatureValue, certBase64, issuerName, serialNumber)
+
+	// 8. Aquí enviarías la petición HTTP usando c.HTTPClient, c.Token y soapFinal...
+	// (Queda pendiente crear el helper enviarPeticionNegocio)
+	fmt.Println(soapFinal)
+
+	return "Simulación exitosa", nil
+}
+
+func (c *Client) authenticateIfNeeded() error {
+	// Si tenemos un token y la fecha actual es ANTES de la fecha de expiración, todo está bien.
+	// Damos un margen de 10 segundos por latencia de red.
+	if c.token != "" && time.Now().Add(10*time.Second).Before(c.expiresAt) {
+		return nil
+	}
+
+	// Si llegamos aquí, necesitamos un token nuevo
+	token, expiresAt, err := c.autenticar() // autenticar ahora debe devolver el token y cuándo expira
+
+	if err != nil {
+		return fmt.Errorf("fallo al renovar el token del SAT: %w", err)
+	}
+
+	c.token = token
+	c.expiresAt = expiresAt
+	return nil
+}
