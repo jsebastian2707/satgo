@@ -270,6 +270,7 @@ func (c *Client) SolicitudRecibidos(fechaInicial string, fechaFinal string, tipo
 	atributos := map[string]string{
 		"FechaInicial":   fechaInicial,
 		"FechaFinal":     fechaFinal,
+		"RfcEmisor":      "",
 		"RfcReceptor":    rfcReceptor,
 		"RfcSolicitante": rfcReceptor,
 		"TipoSolicitud":  tipoSolicitud, // "CFDI" o "Metadata"
@@ -279,7 +280,7 @@ func (c *Client) SolicitudRecibidos(fechaInicial string, fechaFinal string, tipo
 	nodoSolicitud := buildCanonicalXML(atributos, "")
 
 	// 3. Preparar el string exacto para el Hash
-	nodoParaHash := fmt.Sprintf(`<des:SolicitaDescarga xmlns:des="http://DescargaMasivaTerceros.sat.gob.mx">%s</des:SolicitaDescarga>`, nodoSolicitud)
+	nodoParaHash := fmt.Sprintf(`<des:SolicitaDescargaRecibidos xmlns:des="http://DescargaMasivaTerceros.sat.gob.mx">%s</des:SolicitaDescargaRecibidos>`, nodoSolicitud)
 
 	// 4. Digest + Firma
 	digestValue := calculateDigest(nodoParaHash)
