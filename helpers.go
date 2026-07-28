@@ -10,11 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"sort"
 	"strings"
-	"time"
 )
 
 // buildCanonicalXML genera el nodo <des:solicitud> ordenando los atributos alfabéticamente de forma automática.
@@ -69,18 +67,11 @@ func signRSA(privateKey *rsa.PrivateKey, data string) (string, error) {
 
 // buildSoapEnvelope ensambla el XML final reemplazando el cierre de la solicitud con el bloque de firma
 func buildSoapEnvelope(actionNode string, canonicalSolicitud string, signedInfo string, signatureValue string, certBase64 string, issuerName string, serialNumber string) string {
-
-	// Plantilla de la firma
 	signatureNode := fmt.Sprintf(`<Signature xmlns="http://www.w3.org/2000/09/xmldsig#">%s<SignatureValue>%s</SignatureValue><KeyInfo><X509Data><X509IssuerSerial><X509IssuerName>%s</X509IssuerName><X509SerialNumber>%s</X509SerialNumber></X509IssuerSerial><X509Certificate>%s</X509Certificate></X509Data></KeyInfo></Signature>`,
 		signedInfo, signatureValue, issuerName, serialNumber, certBase64)
-
-	// Inyectamos la firma justo antes del cierre de </des:solicitud>
 	solicitudConFirma := strings.Replace(canonicalSolicitud, "</des:solicitud>", signatureNode+"</des:solicitud>", 1)
-
-	// Envolvemos todo en el cascarón SOAP apuntando al nodo de acción (ej. SolicitaDescargaFolio)
 	soapBody := fmt.Sprintf(`<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" xmlns:des="http://DescargaMasivaTerceros.sat.gob.mx"><s:Header/><s:Body><des:%s>%s</des:%s></s:Body></s:Envelope>`,
 		actionNode, solicitudConFirma, actionNode)
-
 	return soapBody
 }
 
@@ -116,8 +107,6 @@ func (c *Client) enviarAutenticacion(soapBody string) (string, error) {
 		return "", fmt.Errorf("el SAT respondió con status %d: %s", resp.StatusCode, respuesta)
 	}
 
-	// Extraer el token de la respuesta XML de forma sencilla
-	// El SAT devuelve algo como: <AutenticaResult>TOKEN_STRING</AutenticaResult>
 	startTag := `<AutenticaResult>`
 	endTag := `</AutenticaResult>`
 
@@ -126,36 +115,34 @@ func (c *Client) enviarAutenticacion(soapBody string) (string, error) {
 
 	if inicio != -1 && fin != -1 {
 		tokenPuro := respuesta[inicio+len(startTag) : fin]
-		// El SAT requiere que mandemos el token con "WRAP access_token=" en los headers
 		return fmt.Sprintf(`WRAP access_token="%s"`, tokenPuro), nil
 	}
 
 	return "", errors.New("no se pudo encontrar el AutenticaResult en la respuesta del SAT")
 }
 
-func enviarPeticionSAT(soapBody string) {
-	url := "https://cfdidescargamasivasolicitud.clouda.sat.gob.mx/Autenticacion/Autenticacion.svc"
-
+func (c *Client) enviarPeticionNegocio(url string, soapAction string, soapBody string) (string, error) {
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer([]byte(soapBody)))
 	if err != nil {
-		log.Fatalf("Error creando request HTTP: %v", err)
+		return "", fmt.Errorf("error creando request: %v", err)
 	}
 
+	// Headers estándar + El Token de autorización que se generó automáticamente
 	req.Header.Set("Content-Type", "text/xml; charset=utf-8")
-	req.Header.Set("SOAPAction", "http://DescargaMasivaTerceros.gob.mx/IAutenticacion/Autentica")
+	req.Header.Set("SOAPAction", soapAction)
+	req.Header.Set("Authorization", c.token)
 
-	client := &http.Client{Timeout: 15 * time.Second}
-
-	fmt.Println("\nEnviando petición al SAT...")
-	resp, err := client.Do(req)
+	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		log.Fatalf("Error en la petición HTTP: %v", err)
+		return "", fmt.Errorf("error enviando la petición: %v", err)
 	}
 	defer resp.Body.Close()
 
 	bodyResp, _ := io.ReadAll(resp.Body)
 
-	fmt.Printf("Status HTTP: %s\n", resp.Status)
-	fmt.Println("Respuesta del servidor:")
-	fmt.Println(string(bodyResp))
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("error HTTP %d del SAT: %s", resp.StatusCode, string(bodyResp))
+	}
+
+	return string(bodyResp), nil
 }

@@ -231,10 +231,15 @@ func (c *Client) SolicitudEmitidos(uuid string, rfcSolicitante string, tipoSolic
 	soapFinal := buildSoapEnvelope("SolicitaDescargaFolio", nodoSolicitud, signedInfo, signatureValue, certBase64, issuerName, serialNumber)
 
 	// 8. Aquí enviarías la petición HTTP usando c.HTTPClient, c.Token y soapFinal...
-	// (Queda pendiente crear el helper enviarPeticionNegocio)
 	fmt.Println(soapFinal)
+	urlSAT := "https://cfdidescargamasivasolicitud.clouda.sat.gob.mx/SolicitaDescargaService.svc"
+	soapAction := "http://DescargaMasivaTerceros.sat.gob.mx/ISolicitaDescargaService/SolicitaDescargaEmitidos"
 
-	return "Simulación exitosa", nil
+	respuestaXML, err := c.enviarPeticionNegocio(urlSAT, soapAction, soapFinal)
+	if err != nil {
+		return "", fmt.Errorf("error en la solicitud al SAT: %w", err)
+	}
+	return respuestaXML, nil
 }
 
 func (c *Client) SolicitudRecibidos(uuid string, tipoSolicitud string, folio string) (string, error) {
@@ -275,7 +280,15 @@ func (c *Client) SolicitudRecibidos(uuid string, tipoSolicitud string, folio str
 	// (Queda pendiente crear el helper enviarPeticionNegocio)
 	fmt.Println(soapFinal)
 
-	return "Simulación exitosa", nil
+	urlSAT := "https://cfdidescargamasivasolicitud.clouda.sat.gob.mx/SolicitaDescargaService.svc"
+	soapAction := "http://DescargaMasivaTerceros.sat.gob.mx/ISolicitaDescargaService/SolicitaDescargaRecibidos"
+
+	respuestaXML, err := c.enviarPeticionNegocio(urlSAT, soapAction, soapFinal)
+	if err != nil {
+		return "", fmt.Errorf("error en la solicitud al SAT: %w", err)
+	}
+
+	return respuestaXML, nil
 }
 
 func (c *Client) SolicitudFolio(uuid string, rfcSolicitante string, tipoSolicitud string, folio string) (string, error) {
@@ -313,21 +326,25 @@ func (c *Client) SolicitudFolio(uuid string, rfcSolicitante string, tipoSolicitu
 	soapFinal := buildSoapEnvelope("SolicitaDescargaFolio", nodoSolicitud, signedInfo, signatureValue, certBase64, issuerName, serialNumber)
 
 	// 8. Aquí enviarías la petición HTTP usando c.HTTPClient, c.Token y soapFinal...
-	// (Queda pendiente crear el helper enviarPeticionNegocio)
 	fmt.Println(soapFinal)
 
-	return "Simulación exitosa", nil
+	urlSAT := "https://cfdidescargamasivasolicitud.clouda.sat.gob.mx/SolicitaDescargaService.svc"
+	soapAction := "http://DescargaMasivaTerceros.sat.gob.mx/ISolicitaDescargaService/SolicitaDescargaFolio"
+
+	respuestaXML, err := c.enviarPeticionNegocio(urlSAT, soapAction, soapFinal)
+	if err != nil {
+		return "", fmt.Errorf("error en la solicitud al SAT: %w", err)
+	}
+
+	return respuestaXML, nil
 }
 
 func (c *Client) authenticateIfNeeded() error {
-	// Si tenemos un token y la fecha actual es ANTES de la fecha de expiración, todo está bien.
-	// Damos un margen de 10 segundos por latencia de red.
 	if c.token != "" && time.Now().Add(10*time.Second).Before(c.expiresAt) {
 		return nil
 	}
 
-	// Si llegamos aquí, necesitamos un token nuevo
-	token, expiresAt, err := c.autenticar() // autenticar ahora debe devolver el token y cuándo expira
+	token, expiresAt, err := c.autenticar()
 
 	if err != nil {
 		return fmt.Errorf("fallo al renovar el token del SAT: %w", err)
