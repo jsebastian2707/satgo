@@ -268,12 +268,13 @@ func (c *Client) SolicitudRecibidos(fechaInicial string, fechaFinal string, tipo
 	}
 	// 1. Definir los atributos (El map en Go no tiene orden fijo, pero buildCanonicalXML lo ordenará)
 	atributos := map[string]string{
-		"FechaInicial":   fechaInicial,
-		"FechaFinal":     fechaFinal,
-		"RfcEmisor":      "",
-		"RfcReceptor":    rfcReceptor,
-		"RfcSolicitante": rfcReceptor,
-		"TipoSolicitud":  tipoSolicitud, // "CFDI" o "Metadata"
+		"EstadoComprobante": "Vigente",
+		"FechaInicial":      fechaInicial,
+		"FechaFinal":        fechaFinal,
+		"RfcEmisor":         "",
+		"RfcReceptor":       rfcReceptor,
+		"RfcSolicitante":    rfcReceptor,
+		"TipoSolicitud":     tipoSolicitud, // "CFDI" o "Metadata"
 	}
 
 	// 2. Generar el nodo canónico (Inner XML vacío porque Folio va como atributo ahora)
@@ -296,7 +297,7 @@ func (c *Client) SolicitudRecibidos(fechaInicial string, fechaFinal string, tipo
 	serialNumber := c.credentials.Certificate.SerialNumber.String()
 
 	// 6. Ensamblar SOAP final
-	soapFinal := buildSoapEnvelope("SolicitaDescarga", nodoSolicitud, signedInfo, signatureValue, certBase64, issuerName, serialNumber)
+	soapFinal := buildSoapEnvelope("SolicitaDescargaRecibidos", nodoSolicitud, signedInfo, signatureValue, certBase64, issuerName, serialNumber)
 
 	// 8. Aquí enviarías la petición HTTP usando c.HTTPClient, c.Token y soapFinal...
 	// (Queda pendiente crear el helper enviarPeticionNegocio)
