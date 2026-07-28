@@ -314,53 +314,34 @@ func (c *Client) SolicitudRecibidos(fechaInicial string, fechaFinal string, tipo
 	return respuestaXML, nil
 }
 
-// RFC solicitante (Opcional): Contiene el RFC del que está realizando la solicitud de descarga.
-// Folio (Obligatorio): Folio Fiscal con formato: XXXXXXXX-XXXX-XXXX-XXXXXXXXXXXXXXXX
-func (c *Client) SolicitudFolio(uuid string, rfcSolicitante string, tipoSolicitud string, folio string) (string, error) {
+// RFC solicitante (Opcional), Folio (Obligatorio)
+func (c *Client) SolicitudFolio(rfcSolicitante string, folio string) (string, error) {
 	if err := c.authenticateIfNeeded(); err != nil {
 		return "", err
 	}
-	// 1. Definir los atributos (El map en Go no tiene orden fijo, pero buildCanonicalXML lo ordenará)
 	atributos := map[string]string{
 		"RfcSolicitante": c.credentials.RFC,
-		"Folio":          uuid,
+		"Folio":          folio,
 	}
-
-	// 2. Generar el nodo canónico (Inner XML vacío porque Folio va como atributo ahora)
 	nodoSolicitud := buildCanonicalXML(atributos, "")
-
-	// 3. Preparar el string exacto para el Hash
 	nodoParaHash := fmt.Sprintf(`<des:SolicitaDescargaFolio xmlns:des="http://DescargaMasivaTerceros.sat.gob.mx">%s</des:SolicitaDescargaFolio>`, nodoSolicitud)
-
-	// 4. Calcular el Hash (DigestValue)
 	digestValue := calculateDigest(nodoParaHash)
-
-	// 5. Generar y firmar el SignedInfo
 	signedInfo := buildSignedInfo(digestValue)
 	signatureValue, err := signRSA(c.credentials.PrivateKey, signedInfo)
 	if err != nil {
 		return "", fmt.Errorf("error al firmar por folio: %v", err)
 	}
-
-	// 6. Obtener datos del certificado para el KeyInfo
 	certBase64 := base64.StdEncoding.EncodeToString(c.credentials.Certificate.Raw)
 	issuerName := c.credentials.Certificate.Issuer.String()
 	serialNumber := c.credentials.Certificate.SerialNumber.String()
-
-	// 7. Ensamblar SOAP final
 	soapFinal := buildSoapEnvelope("SolicitaDescargaFolio", nodoSolicitud, signedInfo, signatureValue, certBase64, issuerName, serialNumber)
-
-	// 8. Aquí enviarías la petición HTTP usando c.HTTPClient, c.Token y soapFinal...
-	fmt.Println(soapFinal)
-
+	//fmt.Println(soapFinal)
 	urlSAT := "https://cfdidescargamasivasolicitud.clouda.sat.gob.mx/SolicitaDescargaService.svc"
 	soapAction := "http://DescargaMasivaTerceros.sat.gob.mx/ISolicitaDescargaService/SolicitaDescargaFolio"
-
 	respuestaXML, err := c.enviarPeticionNegocio(urlSAT, soapAction, soapFinal)
 	if err != nil {
 		return "", fmt.Errorf("error en la solicitud al SAT: %w", err)
 	}
-
 	return respuestaXML, nil
 }
 
