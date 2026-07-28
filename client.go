@@ -196,6 +196,16 @@ func (c *Client) autenticar() (string, time.Time, error) {
 	return token, expirestime, err
 }
 
+// Fecha inicial (Obligatorio): Fecha de inicio, con formato AAAA-MM-DDThh:mm:ss.
+// Fecha final (Obligatorio): Fecha de fin del rango, con formato AAAA-MM-DDThh:mm:ss.
+// RFC Receptor (opcional): Contiene un arreglo de el/los RFCs receptores de los cuales se quiere consultar los CFDIs (Máximo 5).
+// RFC Emisor (Obligatorio): Contiene el RFC del emisor del cual se quiere consultar los CFDI.
+// RFC solicitante (Opcional): Contiene el RFC del que está realizando la solicitud de descarga. Este parámetro es opcional, pero en caso de proporcionarse debe coincidir con el RFC Emisor.
+// Tipo de Solicitud (Obligatorio): Tipo de solicitud que se realizará al SAT, CFDI o Metadata.
+// Tipo de Comprobante (Opcional): Define el tipo de comprobante (Null, I = Ingreso, E = Egreso, T= Traslado, N = Nomina, P = Pago). Null es el valor predeterminado y en caso de no declararse, se obtendrán todos los comprobantes sin importar el tipo comprobante.
+// Estado del comprobante (Opcional): Define el estado del comprobante (Todos, Cancelado, Vigente). En caso de que no se proporcione, se considerara Vigente como valor por defecto.
+// RFC A Cuenta de Terceros (Opcional): Contiene el RFC del a cuenta a tercero del cual se quiere consultar los CFDIs.
+// Complemento (Opcional): Define el complemento de CFDI a descargar. null es el valor predeterminado y en caso de no declararse, se obtendrán todos los comprobantes sin importar el complemento asociado a los comprobantes.
 func (c *Client) SolicitudEmitidos(uuid string, rfcSolicitante string, tipoSolicitud string, folio string) (string, error) {
 	if err := c.authenticateIfNeeded(); err != nil {
 		return "", err
@@ -242,39 +252,50 @@ func (c *Client) SolicitudEmitidos(uuid string, rfcSolicitante string, tipoSolic
 	return respuestaXML, nil
 }
 
-func (c *Client) SolicitudRecibidos(uuid string, tipoSolicitud string, folio string) (string, error) {
+// Fecha inicial (Obligatorio): Fecha de inicio, con formato AAAA-MM-DDThh:mm:ss.
+// Fecha final (Obligatorio): Fecha de fin del rango, con formato AAAA-MM-DDThh:mm:ss.
+// RFC Receptor (Obligatorio): Contiene el RFC Receptor el cual corresponde con el contribuyente del cual se requiere la información.
+// RFC Emisor (Opcional): Contiene el RFC del emisor del cual se quiere consultar los CFDI.
+// RFC solicitante (Opcional): Contiene el RFC del que está realizando la solicitud de descarga. Este parámetro es opcional, pero en caso de proporcionarse debe coincidir con el RFC Receptor.
+// Tipo de Comprobante (Opcional): Define el tipo de comprobante (Null, I = Ingreso, E = Egreso, T= Traslado, N = Nomina, P = Pago). Null es el valor predeterminado y en caso de no declararse, se obtendrán todos los comprobantes sin importar el tipo comprobante.
+// Estado del comprobante (Opcional): Define el estado del comprobante (Todos, Cancelado, Vigente). En caso de que no se proporcione, se considerara Vigente como valor por defecto.
+// REGLA: Para efectos de la metadata el listado solo incluirá los comprobantes vigentes y cancelados, para efectos de la descarga de XML, solo se incluirán los vigentes. Por lo tanto, el servicio no descargará XML cancelados.
+// RFC A Cuenta de Terceros (Opcional): Contiene el RFC del a cuenta a tercero del cual se quiere consultar los CFDIs.
+// Complemento (Opcional): Define el complemento de CFDI a descargar. null es el valor predeterminado y en caso de no declararse, se obtendrán todos los comprobantes sin importar el complemento asociado a los comprobantes.
+func (c *Client) SolicitudRecibidos(fechaInicial string, fechaFinal string, tipoSolicitud string, rfcReceptor string) (string, error) {
 	if err := c.authenticateIfNeeded(); err != nil {
 		return "", err
 	}
 	// 1. Definir los atributos (El map en Go no tiene orden fijo, pero buildCanonicalXML lo ordenará)
 	atributos := map[string]string{
-		"RfcSolicitante": c.credentials.RFC,
-		"Folio":          uuid,
+		"FechaInicial":   fechaInicial,
+		"FechaFinal":     fechaFinal,
+		"RfcReceptor":    rfcReceptor,
+		"RfcSolicitante": rfcReceptor,
+		"TipoSolicitud":  tipoSolicitud, // "CFDI" o "Metadata"
 	}
 
 	// 2. Generar el nodo canónico (Inner XML vacío porque Folio va como atributo ahora)
 	nodoSolicitud := buildCanonicalXML(atributos, "")
 
 	// 3. Preparar el string exacto para el Hash
-	nodoParaHash := fmt.Sprintf(`<des:SolicitaDescargaFolio xmlns:des="http://DescargaMasivaTerceros.sat.gob.mx">%s</des:SolicitaDescargaFolio>`, nodoSolicitud)
+	nodoParaHash := fmt.Sprintf(`<des:SolicitaDescarga xmlns:des="http://DescargaMasivaTerceros.sat.gob.mx">%s</des:SolicitaDescarga>`, nodoSolicitud)
 
-	// 4. Calcular el Hash (DigestValue)
+	// 4. Digest + Firma
 	digestValue := calculateDigest(nodoParaHash)
-
-	// 5. Generar y firmar el SignedInfo
 	signedInfo := buildSignedInfo(digestValue)
 	signatureValue, err := signRSA(c.credentials.PrivateKey, signedInfo)
 	if err != nil {
-		return "", fmt.Errorf("error al firmar por folio: %v", err)
+		return "", fmt.Errorf("error al firmar solicitud recibidos: %w", err)
 	}
 
-	// 6. Obtener datos del certificado para el KeyInfo
+	// 5. Obtener datos del certificado para el KeyInfo
 	certBase64 := base64.StdEncoding.EncodeToString(c.credentials.Certificate.Raw)
 	issuerName := c.credentials.Certificate.Issuer.String()
 	serialNumber := c.credentials.Certificate.SerialNumber.String()
 
-	// 7. Ensamblar SOAP final
-	soapFinal := buildSoapEnvelope("SolicitaDescargaFolio", nodoSolicitud, signedInfo, signatureValue, certBase64, issuerName, serialNumber)
+	// 6. Ensamblar SOAP final
+	soapFinal := buildSoapEnvelope("SolicitaDescarga", nodoSolicitud, signedInfo, signatureValue, certBase64, issuerName, serialNumber)
 
 	// 8. Aquí enviarías la petición HTTP usando c.HTTPClient, c.Token y soapFinal...
 	// (Queda pendiente crear el helper enviarPeticionNegocio)
@@ -291,6 +312,8 @@ func (c *Client) SolicitudRecibidos(uuid string, tipoSolicitud string, folio str
 	return respuestaXML, nil
 }
 
+// RFC solicitante (Opcional): Contiene el RFC del que está realizando la solicitud de descarga.
+// Folio (Obligatorio): Folio Fiscal con formato: XXXXXXXX-XXXX-XXXX-XXXXXXXXXXXXXXXX
 func (c *Client) SolicitudFolio(uuid string, rfcSolicitante string, tipoSolicitud string, folio string) (string, error) {
 	if err := c.authenticateIfNeeded(); err != nil {
 		return "", err
