@@ -190,7 +190,7 @@ func (c *Client) autenticar() (string, time.Time, error) {
 // Estado del comprobante (Opcional): Define el estado del comprobante (Todos, Cancelado, Vigente). En caso de que no se proporcione, se considerara Vigente como valor por defecto.
 // RFC A Cuenta de Terceros (Opcional): Contiene el RFC del a cuenta a tercero del cual se quiere consultar los CFDIs.
 // Complemento (Opcional): Define el complemento de CFDI a descargar. null es el valor predeterminado y en caso de no declararse, se obtendrán todos los comprobantes sin importar el complemento asociado a los comprobantes.
-func (c *Client) SolicitudEmitidos(fechaInicial string, fechaFinal string, tipoSolicitud string, rfcEmisor string, rfcSolicitante string, tipoComprobante string, rfcACuentadeTerceros string) (*RespuestaSolicitud, error) {
+func (c *Client) SolicitudEmitidos(fechaInicial string, fechaFinal string, tipoSolicitud string, rfcEmisor string, rfcSolicitante string, tipoComprobante string, rfcACuentadeTerceros string, estadoComprobante string) (*RespuestaSolicitud, error) {
 	if err := c.authenticateIfNeeded(); err != nil {
 		return nil, err
 	}
@@ -208,7 +208,11 @@ func (c *Client) SolicitudEmitidos(fechaInicial string, fechaFinal string, tipoS
 	}
 
 	if rfcACuentadeTerceros != "" {
-		atributos["rfcACuentadeTerceros"] = rfcACuentadeTerceros
+		atributos["RfcACuentadeTerceros"] = rfcACuentadeTerceros
+	}
+
+	if estadoComprobante != "" {
+		atributos["EstadoComprobante"] = estadoComprobante
 	}
 
 	// 2. Generar el nodo canónico (Inner XML vacío porque Folio va como atributo ahora)
@@ -252,7 +256,7 @@ func (c *Client) SolicitudEmitidos(fechaInicial string, fechaFinal string, tipoS
 // REGLA: Para efectos de la metadata el listado solo incluirá los comprobantes vigentes y cancelados, para efectos de la descarga de XML, solo se incluirán los vigentes. Por lo tanto, el servicio no descargará XML cancelados.
 // RFC A Cuenta de Terceros (Opcional): Contiene el RFC del a cuenta a tercero del cual se quiere consultar los CFDIs.
 // Complemento (Opcional): Define el complemento de CFDI a descargar. null es el valor predeterminado y en caso de no declararse, se obtendrán todos los comprobantes sin importar el complemento asociado a los comprobantes.
-func (c *Client) SolicitudRecibidos(estadoComprobante string, fechaInicial string, fechaFinal string, tipoSolicitud string, rfcReceptor string, rfcEmisor string, TipoComprobante string) (*RespuestaSolicitud, error) {
+func (c *Client) SolicitudRecibidos(estadoComprobante string, fechaInicial string, fechaFinal string, tipoSolicitud string, rfcReceptor string, rfcEmisor string, TipoComprobante string, rfcACuentaTerceros string) (*RespuestaSolicitud, error) {
 	if err := c.authenticateIfNeeded(); err != nil {
 		return nil, err
 	}
@@ -272,12 +276,16 @@ func (c *Client) SolicitudRecibidos(estadoComprobante string, fechaInicial strin
 		atributos["RfcEmisor"] = rfcEmisor
 	}
 
-	if rfcEmisor != "" {
-		atributos["RfcSolicitante"] = rfcReceptor
+	if rfcReceptor != "" {
+		atributos["RfcReceptor"] = rfcReceptor
 	}
 
 	if TipoComprobante != "" {
 		atributos["TipoComprobante"] = TipoComprobante
+	}
+
+	if rfcACuentaTerceros != "" {
+		atributos["RfcACuentaTerceros"] = rfcACuentaTerceros
 	}
 
 	// 2. Generar el nodo canónico (Inner XML vacío porque Folio va como atributo ahora)
