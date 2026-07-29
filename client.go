@@ -328,9 +328,9 @@ func (c *Client) SolicitudFolio(rfcSolicitante string, folio string) (*Respuesta
 }
 
 // Verificacion consulta el estado de una solicitud previamente generada (necesitas el IdSolicitud)
-func (c *Client) Verificacion(idSolicitud string, rfcSolicitante string) (string, error) {
+func (c *Client) Verificacion(idSolicitud string, rfcSolicitante string) (*RespuestaVerificacion, error) {
 	if err := c.authenticateIfNeeded(); err != nil {
-		return "", err
+		return nil, err
 	}
 
 	// 1. Atributos obligatorios para la verificación
@@ -350,7 +350,7 @@ func (c *Client) Verificacion(idSolicitud string, rfcSolicitante string) (string
 	signedInfo := buildSignedInfo(digestValue)
 	signatureValue, err := signRSA(c.credentials.PrivateKey, signedInfo)
 	if err != nil {
-		return "", fmt.Errorf("error al firmar verificación: %w", err)
+		return nil, fmt.Errorf("error al firmar verificación: %w", err)
 	}
 
 	// 5. Credenciales
@@ -367,16 +367,16 @@ func (c *Client) Verificacion(idSolicitud string, rfcSolicitante string) (string
 
 	respuestaXML, err := c.enviarPeticionNegocio(urlSAT, soapAction, soapFinal)
 	if err != nil {
-		return "", fmt.Errorf("error en la solicitud al SAT: %w", err)
+		return nil, fmt.Errorf("error en la solicitud al SAT: %w", err)
 	}
 
-	return respuestaXML, nil
+	return parseRespuestaVerificacion(respuestaXML)
 }
 
 // Descarga pide el paquete masivo (.zip en base64) usando el IdPaquete obtenido en la Verificación
-func (c *Client) Descarga(idPaquete string, rfcSolicitante string) (string, error) {
+func (c *Client) Descarga(idPaquete string, rfcSolicitante string) (*RespuestaDescarga, error) {
 	if err := c.authenticateIfNeeded(); err != nil {
-		return "", err
+		return nil, err
 	}
 
 	// 1. Atributos para Descarga (OJO: aquí se usa IdPaquete, no IdSolicitud)
@@ -402,7 +402,7 @@ func (c *Client) Descarga(idPaquete string, rfcSolicitante string) (string, erro
 	signedInfo := buildSignedInfo(digestValue)
 	signatureValue, err := signRSA(c.credentials.PrivateKey, signedInfo)
 	if err != nil {
-		return "", fmt.Errorf("error al firmar descarga: %w", err)
+		return nil, fmt.Errorf("error al firmar descarga: %w", err)
 	}
 
 	// 5. Credenciales
@@ -417,10 +417,10 @@ func (c *Client) Descarga(idPaquete string, rfcSolicitante string) (string, erro
 	// (Nota que la URL ya está internamente en enviarPeticionDescarga)
 	respuestaXML, err := c.enviarPeticionDescarga(soapFinal)
 	if err != nil {
-		return "", fmt.Errorf("error en la solicitud al SAT: %w", err)
+		return nil, fmt.Errorf("error en la solicitud al SAT: %w", err)
 	}
 
-	return respuestaXML, nil
+	return parseRespuestaDescarga(respuestaXML)
 }
 
 func (c *Client) authenticateIfNeeded() error {
