@@ -190,7 +190,7 @@ func (c *Client) autenticar() (string, time.Time, error) {
 // Estado del comprobante (Opcional): Define el estado del comprobante (Todos, Cancelado, Vigente). En caso de que no se proporcione, se considerara Vigente como valor por defecto.
 // RFC A Cuenta de Terceros (Opcional): Contiene el RFC del a cuenta a tercero del cual se quiere consultar los CFDIs.
 // Complemento (Opcional): Define el complemento de CFDI a descargar. null es el valor predeterminado y en caso de no declararse, se obtendrán todos los comprobantes sin importar el complemento asociado a los comprobantes.
-func (c *Client) SolicitudEmitidos(fechaInicial string, fechaFinal string, tipoSolicitud string, rfcEmisor string, rfcSolicitante string) (*RespuestaSolicitud, error) {
+func (c *Client) SolicitudEmitidos(fechaInicial string, fechaFinal string, tipoSolicitud string, rfcEmisor string, rfcSolicitante string, tipoComprobante string, rfcACuentadeTerceros string) (*RespuestaSolicitud, error) {
 	if err := c.authenticateIfNeeded(); err != nil {
 		return nil, err
 	}
@@ -201,6 +201,14 @@ func (c *Client) SolicitudEmitidos(fechaInicial string, fechaFinal string, tipoS
 		"RfcEmisor":      rfcEmisor,
 		"RfcSolicitante": rfcSolicitante,
 		"TipoSolicitud":  tipoSolicitud,
+	}
+
+	if tipoComprobante != "" {
+		atributos["TipoComprobante"] = tipoComprobante
+	}
+
+	if rfcACuentadeTerceros != "" {
+		atributos["rfcACuentadeTerceros"] = rfcACuentadeTerceros
 	}
 
 	// 2. Generar el nodo canónico (Inner XML vacío porque Folio va como atributo ahora)
@@ -221,7 +229,7 @@ func (c *Client) SolicitudEmitidos(fechaInicial string, fechaFinal string, tipoS
 	serialNumber := c.credentials.Certificate.SerialNumber.String()
 
 	// 7. Ensamblar SOAP final
-	soapFinal := buildSoapEnvelope("SolicitaDescargaFolio", nodoSolicitud, "des:solicitud", signedInfo, signatureValue, certBase64, issuerName, serialNumber)
+	soapFinal := buildSoapEnvelope("SolicitaDescargaEmitidos", nodoSolicitud, "des:solicitud", signedInfo, signatureValue, certBase64, issuerName, serialNumber)
 
 	// 8. Aquí enviarías la petición HTTP usando c.HTTPClient, c.Token y soapFinal...
 	urlSAT := "https://cfdidescargamasivasolicitud.clouda.sat.gob.mx/SolicitaDescargaService.svc"
@@ -244,17 +252,20 @@ func (c *Client) SolicitudEmitidos(fechaInicial string, fechaFinal string, tipoS
 // REGLA: Para efectos de la metadata el listado solo incluirá los comprobantes vigentes y cancelados, para efectos de la descarga de XML, solo se incluirán los vigentes. Por lo tanto, el servicio no descargará XML cancelados.
 // RFC A Cuenta de Terceros (Opcional): Contiene el RFC del a cuenta a tercero del cual se quiere consultar los CFDIs.
 // Complemento (Opcional): Define el complemento de CFDI a descargar. null es el valor predeterminado y en caso de no declararse, se obtendrán todos los comprobantes sin importar el complemento asociado a los comprobantes.
-func (c *Client) SolicitudRecibidos(fechaInicial string, fechaFinal string, tipoSolicitud string, rfcReceptor string, rfcEmisor string) (*RespuestaSolicitud, error) {
+func (c *Client) SolicitudRecibidos(estadoComprobante string, fechaInicial string, fechaFinal string, tipoSolicitud string, rfcReceptor string, rfcEmisor string, TipoComprobante string) (*RespuestaSolicitud, error) {
 	if err := c.authenticateIfNeeded(); err != nil {
 		return nil, err
 	}
 	// 1. Definir los atributos (El map en Go no tiene orden fijo, pero buildCanonicalXML lo ordenará)
 	atributos := map[string]string{
-		"EstadoComprobante": "Vigente",
-		"FechaInicial":      fechaInicial,
-		"FechaFinal":        fechaFinal,
-		"RfcReceptor":       rfcReceptor,
-		"TipoSolicitud":     tipoSolicitud,
+		"FechaInicial":  fechaInicial,
+		"FechaFinal":    fechaFinal,
+		"RfcReceptor":   rfcReceptor,
+		"TipoSolicitud": tipoSolicitud,
+	}
+
+	if estadoComprobante != "" {
+		atributos["EstadoComprobante"] = estadoComprobante
 	}
 
 	if rfcEmisor != "" {
@@ -263,6 +274,10 @@ func (c *Client) SolicitudRecibidos(fechaInicial string, fechaFinal string, tipo
 
 	if rfcEmisor != "" {
 		atributos["RfcSolicitante"] = rfcReceptor
+	}
+
+	if TipoComprobante != "" {
+		atributos["TipoComprobante"] = TipoComprobante
 	}
 
 	// 2. Generar el nodo canónico (Inner XML vacío porque Folio va como atributo ahora)
@@ -303,7 +318,7 @@ func (c *Client) SolicitudFolio(rfcSolicitante string, folio string) (*Respuesta
 		return nil, err
 	}
 	atributos := map[string]string{
-		"RfcSolicitante": c.credentials.RFC,
+		"RfcSolicitante": rfcSolicitante,
 		"Folio":          folio,
 	}
 	nodoSolicitud := buildCanonicalXML("des:solicitud", atributos, "")
