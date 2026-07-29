@@ -116,21 +116,6 @@ func (c *Client) RFC() string {
 	return c.credentials.RFC
 }
 
-func (c *Client) Verificacion(IdSolicitud string, RfcSolicitante string) (string, error) {
-	if err := c.authenticateIfNeeded(); err != nil {
-		return "", err
-	}
-	return "", errors.New("función no implementada aún")
-}
-
-// SolicitarDescargaCFDI pide el paquete masivo
-func (c *Client) Descarga(IdSolicitud string, RfcSolicitante string) (string, error) {
-	if err := c.authenticateIfNeeded(); err != nil {
-		return "", err
-	}
-	return "", errors.New("función no implementada aún")
-}
-
 func (c *Client) autenticar() (string, time.Time, error) {
 	now := time.Now().UTC()
 	created := now.Format("2006-01-02T15:04:05.000Z")
@@ -206,23 +191,22 @@ func (c *Client) autenticar() (string, time.Time, error) {
 // Estado del comprobante (Opcional): Define el estado del comprobante (Todos, Cancelado, Vigente). En caso de que no se proporcione, se considerara Vigente como valor por defecto.
 // RFC A Cuenta de Terceros (Opcional): Contiene el RFC del a cuenta a tercero del cual se quiere consultar los CFDIs.
 // Complemento (Opcional): Define el complemento de CFDI a descargar. null es el valor predeterminado y en caso de no declararse, se obtendrán todos los comprobantes sin importar el complemento asociado a los comprobantes.
-func (c *Client) SolicitudEmitidos(uuid string, rfcSolicitante string, tipoSolicitud string, folio string) (string, error) {
+func (c *Client) SolicitudEmitidos(fechaInicial string, fechaFinal string, tipoSolicitud string, rfcEmisor string, rfcSolicitante string) (string, error) {
 	if err := c.authenticateIfNeeded(); err != nil {
 		return "", err
 	}
 	// 1. Definir los atributos (El map en Go no tiene orden fijo, pero buildCanonicalXML lo ordenará)
 	atributos := map[string]string{
+		"FechaInicial":   fechaInicial,
+		"FechaFinal":     fechaFinal,
+		"RfcEmisor":      rfcEmisor,
 		"RfcSolicitante": rfcSolicitante,
-		"Folio":          uuid,
+		"TipoSolicitud":  tipoSolicitud,
 	}
 
 	// 2. Generar el nodo canónico (Inner XML vacío porque Folio va como atributo ahora)
-	nodoSolicitud := buildCanonicalXML(atributos, "")
-
-	// 3. Preparar el string exacto para el Hash
-	nodoParaHash := fmt.Sprintf(`<des:SolicitaDescargaFolio xmlns:des="http://DescargaMasivaTerceros.sat.gob.mx">%s</des:SolicitaDescargaFolio>`, nodoSolicitud)
-
-	// 4. Calcular el Hash (DigestValue)
+	nodoSolicitud := buildCanonicalXML("des:solicitud", atributos, "")
+	nodoParaHash := fmt.Sprintf(`<des:SolicitaDescarga xmlns:des="http://DescargaMasivaTerceros.sat.gob.mx">%s</des:SolicitaDescarga>`, nodoSolicitud)
 	digestValue := calculateDigest(nodoParaHash)
 
 	// 5. Generar y firmar el SignedInfo
@@ -238,7 +222,7 @@ func (c *Client) SolicitudEmitidos(uuid string, rfcSolicitante string, tipoSolic
 	serialNumber := c.credentials.Certificate.SerialNumber.String()
 
 	// 7. Ensamblar SOAP final
-	soapFinal := buildSoapEnvelope("SolicitaDescargaFolio", nodoSolicitud, signedInfo, signatureValue, certBase64, issuerName, serialNumber)
+	soapFinal := buildSoapEnvelope("SolicitaDescargaFolio", nodoSolicitud, "des:solicitud", signedInfo, signatureValue, certBase64, issuerName, serialNumber)
 
 	// 8. Aquí enviarías la petición HTTP usando c.HTTPClient, c.Token y soapFinal...
 	fmt.Println(soapFinal)
@@ -262,7 +246,7 @@ func (c *Client) SolicitudEmitidos(uuid string, rfcSolicitante string, tipoSolic
 // REGLA: Para efectos de la metadata el listado solo incluirá los comprobantes vigentes y cancelados, para efectos de la descarga de XML, solo se incluirán los vigentes. Por lo tanto, el servicio no descargará XML cancelados.
 // RFC A Cuenta de Terceros (Opcional): Contiene el RFC del a cuenta a tercero del cual se quiere consultar los CFDIs.
 // Complemento (Opcional): Define el complemento de CFDI a descargar. null es el valor predeterminado y en caso de no declararse, se obtendrán todos los comprobantes sin importar el complemento asociado a los comprobantes.
-func (c *Client) SolicitudRecibidos(fechaInicial string, fechaFinal string, tipoSolicitud string, rfcReceptor string) (string, error) {
+func (c *Client) SolicitudRecibidos(fechaInicial string, fechaFinal string, tipoSolicitud string, rfcReceptor string, rfcEmisor string) (string, error) {
 	if err := c.authenticateIfNeeded(); err != nil {
 		return "", err
 	}
@@ -271,14 +255,17 @@ func (c *Client) SolicitudRecibidos(fechaInicial string, fechaFinal string, tipo
 		"EstadoComprobante": "Vigente",
 		"FechaInicial":      fechaInicial,
 		"FechaFinal":        fechaFinal,
-		"RfcEmisor":         "",
 		"RfcReceptor":       rfcReceptor,
 		"RfcSolicitante":    rfcReceptor,
-		"TipoSolicitud":     tipoSolicitud, // "CFDI" o "Metadata"
+		"TipoSolicitud":     tipoSolicitud,
+	}
+
+	if rfcEmisor != "" {
+		atributos["RfcEmisor"] = rfcEmisor
 	}
 
 	// 2. Generar el nodo canónico (Inner XML vacío porque Folio va como atributo ahora)
-	nodoSolicitud := buildCanonicalXML(atributos, "")
+	nodoSolicitud := buildCanonicalXML("des:solicitud", atributos, "")
 
 	// 3. Preparar el string exacto para el Hash
 	nodoParaHash := fmt.Sprintf(`<des:SolicitaDescargaRecibidos xmlns:des="http://DescargaMasivaTerceros.sat.gob.mx">%s</des:SolicitaDescargaRecibidos>`, nodoSolicitud)
@@ -297,7 +284,7 @@ func (c *Client) SolicitudRecibidos(fechaInicial string, fechaFinal string, tipo
 	serialNumber := c.credentials.Certificate.SerialNumber.String()
 
 	// 6. Ensamblar SOAP final
-	soapFinal := buildSoapEnvelope("SolicitaDescargaRecibidos", nodoSolicitud, signedInfo, signatureValue, certBase64, issuerName, serialNumber)
+	soapFinal := buildSoapEnvelope("SolicitaDescargaRecibidos", nodoSolicitud, "des:solicitud", signedInfo, signatureValue, certBase64, issuerName, serialNumber)
 
 	// 8. Aquí enviarías la petición HTTP usando c.HTTPClient, c.Token y soapFinal...
 	// (Queda pendiente crear el helper enviarPeticionNegocio)
@@ -323,7 +310,7 @@ func (c *Client) SolicitudFolio(rfcSolicitante string, folio string) (string, er
 		"RfcSolicitante": c.credentials.RFC,
 		"Folio":          folio,
 	}
-	nodoSolicitud := buildCanonicalXML(atributos, "")
+	nodoSolicitud := buildCanonicalXML("des:solicitud", atributos, "")
 	nodoParaHash := fmt.Sprintf(`<des:SolicitaDescargaFolio xmlns:des="http://DescargaMasivaTerceros.sat.gob.mx">%s</des:SolicitaDescargaFolio>`, nodoSolicitud)
 	digestValue := calculateDigest(nodoParaHash)
 	signedInfo := buildSignedInfo(digestValue)
@@ -334,7 +321,7 @@ func (c *Client) SolicitudFolio(rfcSolicitante string, folio string) (string, er
 	certBase64 := base64.StdEncoding.EncodeToString(c.credentials.Certificate.Raw)
 	issuerName := c.credentials.Certificate.Issuer.String()
 	serialNumber := c.credentials.Certificate.SerialNumber.String()
-	soapFinal := buildSoapEnvelope("SolicitaDescargaFolio", nodoSolicitud, signedInfo, signatureValue, certBase64, issuerName, serialNumber)
+	soapFinal := buildSoapEnvelope("SolicitaDescargaFolio", nodoSolicitud, "des:solicitud", signedInfo, signatureValue, certBase64, issuerName, serialNumber)
 	//fmt.Println(soapFinal)
 	urlSAT := "https://cfdidescargamasivasolicitud.clouda.sat.gob.mx/SolicitaDescargaService.svc"
 	soapAction := "http://DescargaMasivaTerceros.sat.gob.mx/ISolicitaDescargaService/SolicitaDescargaFolio"
@@ -342,6 +329,102 @@ func (c *Client) SolicitudFolio(rfcSolicitante string, folio string) (string, er
 	if err != nil {
 		return "", fmt.Errorf("error en la solicitud al SAT: %w", err)
 	}
+	return respuestaXML, nil
+}
+
+// Verificacion consulta el estado de una solicitud previamente generada (necesitas el IdSolicitud)
+func (c *Client) Verificacion(idSolicitud string, rfcSolicitante string) (string, error) {
+	if err := c.authenticateIfNeeded(); err != nil {
+		return "", err
+	}
+
+	// 1. Atributos obligatorios para la verificación
+	atributos := map[string]string{
+		"IdSolicitud":    idSolicitud,
+		"RfcSolicitante": rfcSolicitante,
+	}
+
+	// 2. Generar nodo canónico
+	nodoSolicitud := buildCanonicalXML("des:solicitud", atributos, "")
+
+	// 3. String exacto a hashear para la acción VerificaSolicitudDescarga
+	nodoParaHash := fmt.Sprintf(`<des:VerificaSolicitudDescarga xmlns:des="http://DescargaMasivaTerceros.sat.gob.mx">%s</des:VerificaSolicitudDescarga>`, nodoSolicitud)
+
+	// 4. Digest + Firma
+	digestValue := calculateDigest(nodoParaHash)
+	signedInfo := buildSignedInfo(digestValue)
+	signatureValue, err := signRSA(c.credentials.PrivateKey, signedInfo)
+	if err != nil {
+		return "", fmt.Errorf("error al firmar verificación: %w", err)
+	}
+
+	// 5. Credenciales
+	certBase64 := base64.StdEncoding.EncodeToString(c.credentials.Certificate.Raw)
+	issuerName := c.credentials.Certificate.Issuer.String()
+	serialNumber := c.credentials.Certificate.SerialNumber.String()
+
+	// 6. Envoltorio SOAP (El primer parámetro es el nombre del nodo principal)
+	soapFinal := buildSoapEnvelope("VerificaSolicitudDescarga", nodoSolicitud, "des:solicitud", signedInfo, signatureValue, certBase64, issuerName, serialNumber)
+
+	// 7. Enviar petición al endpoint de Verificación
+	urlSAT := "https://cfdidescargamasivasolicitud.clouda.sat.gob.mx/VerificaSolicitudDescargaService.svc"
+	soapAction := "http://DescargaMasivaTerceros.sat.gob.mx/IVerificaSolicitudDescargaService/VerificaSolicitudDescarga"
+
+	respuestaXML, err := c.enviarPeticionNegocio(urlSAT, soapAction, soapFinal)
+	if err != nil {
+		return "", fmt.Errorf("error en la solicitud al SAT: %w", err)
+	}
+
+	return respuestaXML, nil
+}
+
+// Descarga pide el paquete masivo (.zip en base64) usando el IdPaquete obtenido en la Verificación
+func (c *Client) Descarga(idPaquete string, rfcSolicitante string) (string, error) {
+	if err := c.authenticateIfNeeded(); err != nil {
+		return "", err
+	}
+
+	// 1. Atributos para Descarga (OJO: aquí se usa IdPaquete, no IdSolicitud)
+	atributos := map[string]string{
+		"IdPaquete":      idPaquete,
+		"RfcSolicitante": rfcSolicitante,
+	}
+
+	/* NOTA SOBRE buildCanonicalXML:
+	   Para la descarga, el SAT técnicamente espera que el nodo interno se llame
+	   <des:peticionDescarga> en lugar de <des:solicitud>.
+	   Si tu función buildCanonicalXML escribe "<des:solicitud" por defecto,
+	   el SAT podría rechazarlo (código 301). Si falla, tendrás que agregar un
+	   parámetro extra a buildCanonicalXML para indicarle el nombre del nodo.
+	*/
+	nodoPeticion := buildCanonicalXML("des:peticionDescarga", atributos, "")
+
+	// 3. String exacto a hashear para la acción PeticionDescargaMasivaTercerosEntrada
+	nodoParaHash := fmt.Sprintf(`<des:PeticionDescargaMasivaTercerosEntrada xmlns:des="http://DescargaMasivaTerceros.sat.gob.mx">%s</des:PeticionDescargaMasivaTercerosEntrada>`, nodoPeticion)
+
+	// 4. Digest + Firma
+	digestValue := calculateDigest(nodoParaHash)
+	signedInfo := buildSignedInfo(digestValue)
+	signatureValue, err := signRSA(c.credentials.PrivateKey, signedInfo)
+	if err != nil {
+		return "", fmt.Errorf("error al firmar descarga: %w", err)
+	}
+
+	// 5. Credenciales
+	certBase64 := base64.StdEncoding.EncodeToString(c.credentials.Certificate.Raw)
+	issuerName := c.credentials.Certificate.Issuer.String()
+	serialNumber := c.credentials.Certificate.SerialNumber.String()
+
+	// 6. Envoltorio SOAP
+	soapFinal := buildSoapEnvelope("PeticionDescargaMasivaTercerosEntrada", nodoPeticion, "des:peticionDescarga", signedInfo, signatureValue, certBase64, issuerName, serialNumber)
+
+	// 7. Enviar petición usando tu helper enviarPeticionDescarga
+	// (Nota que la URL ya está internamente en enviarPeticionDescarga)
+	respuestaXML, err := c.enviarPeticionDescarga(soapFinal)
+	if err != nil {
+		return "", fmt.Errorf("error en la solicitud al SAT: %w", err)
+	}
+
 	return respuestaXML, nil
 }
 

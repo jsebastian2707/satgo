@@ -15,28 +15,22 @@ import (
 	"strings"
 )
 
-// buildCanonicalXML genera el nodo <des:solicitud> ordenando los atributos alfabéticamente de forma automática.
-func buildCanonicalXML(atributos map[string]string, innerXML string) string {
-	// 1. Extraer las llaves del mapa
+func buildCanonicalXML(nodeName string, atributos map[string]string, innerXML string) string {
 	keys := make([]string, 0, len(atributos))
 	for k := range atributos {
 		keys = append(keys, k)
 	}
-
-	// 2. Ordenar alfabéticamente (Regla de oro del SAT)
 	sort.Strings(keys)
 
-	// 3. Construir la cadena de atributos dinámicamente
 	var attrsBuilder strings.Builder
 	for _, k := range keys {
 		attrsBuilder.WriteString(fmt.Sprintf(` %s="%s"`, k, atributos[k]))
 	}
 
-	// 4. Ensamblar el nodo con o sin contenido interno
 	if innerXML != "" {
-		return fmt.Sprintf(`<des:solicitud%s>%s</des:solicitud>`, attrsBuilder.String(), innerXML)
+		return fmt.Sprintf(`<%s%s>%s</%s>`, nodeName, attrsBuilder.String(), innerXML, nodeName)
 	}
-	return fmt.Sprintf(`<des:solicitud%s></des:solicitud>`, attrsBuilder.String())
+	return fmt.Sprintf(`<%s%s></%s>`, nodeName, attrsBuilder.String(), nodeName)
 }
 
 // calculateDigest obtiene el hash SHA1 en base64 de una cadena
@@ -65,11 +59,14 @@ func signRSA(privateKey *rsa.PrivateKey, data string) (string, error) {
 	return base64.StdEncoding.EncodeToString(signatureBytes), nil
 }
 
-// buildSoapEnvelope ensambla el XML final reemplazando el cierre de la solicitud con el bloque de firma
-func buildSoapEnvelope(actionNode string, canonicalSolicitud string, signedInfo string, signatureValue string, certBase64 string, issuerName string, serialNumber string) string {
+func buildSoapEnvelope(actionNode string, canonicalSolicitud string, nodeName string, signedInfo string, signatureValue string, certBase64 string, issuerName string, serialNumber string) string {
 	signatureNode := fmt.Sprintf(`<Signature xmlns="http://www.w3.org/2000/09/xmldsig#">%s<SignatureValue>%s</SignatureValue><KeyInfo><X509Data><X509IssuerSerial><X509IssuerName>%s</X509IssuerName><X509SerialNumber>%s</X509SerialNumber></X509IssuerSerial><X509Certificate>%s</X509Certificate></X509Data></KeyInfo></Signature>`,
 		signedInfo, signatureValue, issuerName, serialNumber, certBase64)
-	solicitudConFirma := strings.Replace(canonicalSolicitud, "</des:solicitud>", signatureNode+"</des:solicitud>", 1)
+
+	// Ahora reemplaza el cierre correcto dinámicamente
+	cierreNodo := fmt.Sprintf(`</%s>`, nodeName)
+	solicitudConFirma := strings.Replace(canonicalSolicitud, cierreNodo, signatureNode+cierreNodo, 1)
+
 	soapBody := fmt.Sprintf(`<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" xmlns:des="http://DescargaMasivaTerceros.sat.gob.mx"><s:Header/><s:Body><des:%s>%s</des:%s></s:Body></s:Envelope>`,
 		actionNode, solicitudConFirma, actionNode)
 	return soapBody
@@ -130,6 +127,33 @@ func (c *Client) enviarPeticionNegocio(url string, soapAction string, soapBody s
 	// Headers estándar + El Token de autorización que se generó automáticamente
 	req.Header.Set("Content-Type", "text/xml; charset=utf-8")
 	req.Header.Set("SOAPAction", soapAction)
+	req.Header.Set("Authorization", c.token)
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("error enviando la petición: %v", err)
+	}
+	defer resp.Body.Close()
+
+	bodyResp, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("error HTTP %d del SAT: %s", resp.StatusCode, string(bodyResp))
+	}
+
+	return string(bodyResp), nil
+}
+
+func (c *Client) enviarPeticionDescarga(soapBody string) (string, error) {
+	req, err := http.NewRequest("POST", "https://cfdidescargamasiva.clouda.sat.gob.mx/DescargaMasivaService.svc", bytes.NewBuffer([]byte(soapBody)))
+	if err != nil {
+		return "", fmt.Errorf("error creando request: %v", err)
+	}
+
+	// Headers estándar + El Token de autorización que se generó automáticamente
+	req.Header.Set("Accept-Encoding", "gzip,deflate")
+	req.Header.Set("Content-Type", "text/xml; charset=utf-8")
+	req.Header.Set("SOAPAction", "http://DescargaMasivaTerceros.sat.gob.mx/IDescargaMasivaTercerosService/Descargar")
 	req.Header.Set("Authorization", c.token)
 
 	resp, err := c.HTTPClient.Do(req)
