@@ -181,8 +181,7 @@ func (c *Client) autenticar() (string, time.Time, error) {
 	return token, expirestime, err
 }
 
-// Fecha inicial (Obligatorio): Fecha de inicio, con formato AAAA-MM-DDThh:mm:ss.
-// Fecha final (Obligatorio): Fecha de fin del rango, con formato AAAA-MM-DDThh:mm:ss.
+// Fecha inicial (Obligatorio),Fecha final (Obligatorio): ambas fechas con formato AAAA-MM-DDThh:mm:ss.
 // RFC Receptor (opcional): Contiene un arreglo de el/los RFCs receptores de los cuales se quiere consultar los CFDIs (Máximo 5).
 // RFC Emisor (Obligatorio): Contiene el RFC del emisor del cual se quiere consultar los CFDI.
 // RFC solicitante (Opcional): Contiene el RFC del que está realizando la solicitud de descarga. Este parámetro es opcional, pero en caso de proporcionarse debe coincidir con el RFC Emisor.
@@ -191,9 +190,9 @@ func (c *Client) autenticar() (string, time.Time, error) {
 // Estado del comprobante (Opcional): Define el estado del comprobante (Todos, Cancelado, Vigente). En caso de que no se proporcione, se considerara Vigente como valor por defecto.
 // RFC A Cuenta de Terceros (Opcional): Contiene el RFC del a cuenta a tercero del cual se quiere consultar los CFDIs.
 // Complemento (Opcional): Define el complemento de CFDI a descargar. null es el valor predeterminado y en caso de no declararse, se obtendrán todos los comprobantes sin importar el complemento asociado a los comprobantes.
-func (c *Client) SolicitudEmitidos(fechaInicial string, fechaFinal string, tipoSolicitud string, rfcEmisor string, rfcSolicitante string) (string, error) {
+func (c *Client) SolicitudEmitidos(fechaInicial string, fechaFinal string, tipoSolicitud string, rfcEmisor string, rfcSolicitante string) (*RespuestaSolicitud, error) {
 	if err := c.authenticateIfNeeded(); err != nil {
-		return "", err
+		return nil, err
 	}
 	// 1. Definir los atributos (El map en Go no tiene orden fijo, pero buildCanonicalXML lo ordenará)
 	atributos := map[string]string{
@@ -213,7 +212,7 @@ func (c *Client) SolicitudEmitidos(fechaInicial string, fechaFinal string, tipoS
 	signedInfo := buildSignedInfo(digestValue)
 	signatureValue, err := signRSA(c.credentials.PrivateKey, signedInfo)
 	if err != nil {
-		return "", fmt.Errorf("error al firmar por folio: %v", err)
+		return nil, fmt.Errorf("error al firmar por folio: %v", err)
 	}
 
 	// 6. Obtener datos del certificado para el KeyInfo
@@ -225,15 +224,14 @@ func (c *Client) SolicitudEmitidos(fechaInicial string, fechaFinal string, tipoS
 	soapFinal := buildSoapEnvelope("SolicitaDescargaFolio", nodoSolicitud, "des:solicitud", signedInfo, signatureValue, certBase64, issuerName, serialNumber)
 
 	// 8. Aquí enviarías la petición HTTP usando c.HTTPClient, c.Token y soapFinal...
-	fmt.Println(soapFinal)
 	urlSAT := "https://cfdidescargamasivasolicitud.clouda.sat.gob.mx/SolicitaDescargaService.svc"
 	soapAction := "http://DescargaMasivaTerceros.sat.gob.mx/ISolicitaDescargaService/SolicitaDescargaEmitidos"
 
 	respuestaXML, err := c.enviarPeticionNegocio(urlSAT, soapAction, soapFinal)
 	if err != nil {
-		return "", fmt.Errorf("error en la solicitud al SAT: %w", err)
+		return nil, fmt.Errorf("error en la solicitud al SAT: %w", err)
 	}
-	return respuestaXML, nil
+	return parseRespuestaSolicitud(respuestaXML)
 }
 
 // Fecha inicial (Obligatorio): Fecha de inicio, con formato AAAA-MM-DDThh:mm:ss.
@@ -246,9 +244,9 @@ func (c *Client) SolicitudEmitidos(fechaInicial string, fechaFinal string, tipoS
 // REGLA: Para efectos de la metadata el listado solo incluirá los comprobantes vigentes y cancelados, para efectos de la descarga de XML, solo se incluirán los vigentes. Por lo tanto, el servicio no descargará XML cancelados.
 // RFC A Cuenta de Terceros (Opcional): Contiene el RFC del a cuenta a tercero del cual se quiere consultar los CFDIs.
 // Complemento (Opcional): Define el complemento de CFDI a descargar. null es el valor predeterminado y en caso de no declararse, se obtendrán todos los comprobantes sin importar el complemento asociado a los comprobantes.
-func (c *Client) SolicitudRecibidos(fechaInicial string, fechaFinal string, tipoSolicitud string, rfcReceptor string, rfcEmisor string) (string, error) {
+func (c *Client) SolicitudRecibidos(fechaInicial string, fechaFinal string, tipoSolicitud string, rfcReceptor string, rfcEmisor string) (*RespuestaSolicitud, error) {
 	if err := c.authenticateIfNeeded(); err != nil {
-		return "", err
+		return nil, err
 	}
 	// 1. Definir los atributos (El map en Go no tiene orden fijo, pero buildCanonicalXML lo ordenará)
 	atributos := map[string]string{
@@ -256,12 +254,15 @@ func (c *Client) SolicitudRecibidos(fechaInicial string, fechaFinal string, tipo
 		"FechaInicial":      fechaInicial,
 		"FechaFinal":        fechaFinal,
 		"RfcReceptor":       rfcReceptor,
-		"RfcSolicitante":    rfcReceptor,
 		"TipoSolicitud":     tipoSolicitud,
 	}
 
 	if rfcEmisor != "" {
 		atributos["RfcEmisor"] = rfcEmisor
+	}
+
+	if rfcEmisor != "" {
+		atributos["RfcSolicitante"] = rfcReceptor
 	}
 
 	// 2. Generar el nodo canónico (Inner XML vacío porque Folio va como atributo ahora)
@@ -275,7 +276,7 @@ func (c *Client) SolicitudRecibidos(fechaInicial string, fechaFinal string, tipo
 	signedInfo := buildSignedInfo(digestValue)
 	signatureValue, err := signRSA(c.credentials.PrivateKey, signedInfo)
 	if err != nil {
-		return "", fmt.Errorf("error al firmar solicitud recibidos: %w", err)
+		return nil, fmt.Errorf("error al firmar solicitud recibidos: %w", err)
 	}
 
 	// 5. Obtener datos del certificado para el KeyInfo
@@ -285,26 +286,21 @@ func (c *Client) SolicitudRecibidos(fechaInicial string, fechaFinal string, tipo
 
 	// 6. Ensamblar SOAP final
 	soapFinal := buildSoapEnvelope("SolicitaDescargaRecibidos", nodoSolicitud, "des:solicitud", signedInfo, signatureValue, certBase64, issuerName, serialNumber)
-
-	// 8. Aquí enviarías la petición HTTP usando c.HTTPClient, c.Token y soapFinal...
-	// (Queda pendiente crear el helper enviarPeticionNegocio)
-	fmt.Println(soapFinal)
-
 	urlSAT := "https://cfdidescargamasivasolicitud.clouda.sat.gob.mx/SolicitaDescargaService.svc"
 	soapAction := "http://DescargaMasivaTerceros.sat.gob.mx/ISolicitaDescargaService/SolicitaDescargaRecibidos"
 
 	respuestaXML, err := c.enviarPeticionNegocio(urlSAT, soapAction, soapFinal)
 	if err != nil {
-		return "", fmt.Errorf("error en la solicitud al SAT: %w", err)
+		return nil, fmt.Errorf("error en la solicitud al SAT: %w", err)
 	}
 
-	return respuestaXML, nil
+	return parseRespuestaSolicitud(respuestaXML)
 }
 
 // RFC solicitante (Opcional), Folio (Obligatorio)
-func (c *Client) SolicitudFolio(rfcSolicitante string, folio string) (string, error) {
+func (c *Client) SolicitudFolio(rfcSolicitante string, folio string) (*RespuestaSolicitud, error) {
 	if err := c.authenticateIfNeeded(); err != nil {
-		return "", err
+		return nil, err
 	}
 	atributos := map[string]string{
 		"RfcSolicitante": c.credentials.RFC,
@@ -316,20 +312,19 @@ func (c *Client) SolicitudFolio(rfcSolicitante string, folio string) (string, er
 	signedInfo := buildSignedInfo(digestValue)
 	signatureValue, err := signRSA(c.credentials.PrivateKey, signedInfo)
 	if err != nil {
-		return "", fmt.Errorf("error al firmar por folio: %v", err)
+		return nil, fmt.Errorf("error al firmar por folio: %v", err)
 	}
 	certBase64 := base64.StdEncoding.EncodeToString(c.credentials.Certificate.Raw)
 	issuerName := c.credentials.Certificate.Issuer.String()
 	serialNumber := c.credentials.Certificate.SerialNumber.String()
 	soapFinal := buildSoapEnvelope("SolicitaDescargaFolio", nodoSolicitud, "des:solicitud", signedInfo, signatureValue, certBase64, issuerName, serialNumber)
-	//fmt.Println(soapFinal)
 	urlSAT := "https://cfdidescargamasivasolicitud.clouda.sat.gob.mx/SolicitaDescargaService.svc"
 	soapAction := "http://DescargaMasivaTerceros.sat.gob.mx/ISolicitaDescargaService/SolicitaDescargaFolio"
 	respuestaXML, err := c.enviarPeticionNegocio(urlSAT, soapAction, soapFinal)
 	if err != nil {
-		return "", fmt.Errorf("error en la solicitud al SAT: %w", err)
+		return nil, fmt.Errorf("error en la solicitud al SAT: %w", err)
 	}
-	return respuestaXML, nil
+	return parseRespuestaSolicitud(respuestaXML)
 }
 
 // Verificacion consulta el estado de una solicitud previamente generada (necesitas el IdSolicitud)

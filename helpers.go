@@ -7,6 +7,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha1"
 	"encoding/base64"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -169,4 +170,170 @@ func (c *Client) enviarPeticionDescarga(soapBody string) (string, error) {
 	}
 
 	return string(bodyResp), nil
+}
+
+//xml
+
+type RespuestaSolicitud struct {
+	IdSolicitud    string `json:"id_solicitud"`
+	RfcSolicitante string `json:"rfc_solicitante"`
+	CodEstatus     string `json:"cod_estatus"`
+	Mensaje        string `json:"mensaje"`
+}
+
+// --- ESTRUCTURAS XML MEJORADAS ---
+type soapEnvelopeSolicitud struct {
+	XMLName xml.Name          `xml:"Envelope"`
+	Body    soapBodySolicitud `xml:"Body"`
+}
+
+type soapBodySolicitud struct {
+	// Ahora atrapa la respuesta de cualquiera de los 3 métodos
+	RecibidosResult *resultadoSolicitudNode `xml:"SolicitaDescargaRecibidosResponse>SolicitaDescargaRecibidosResult"`
+	EmitidosResult  *resultadoSolicitudNode `xml:"SolicitaDescargaResponse>SolicitaDescargaResult"`
+	FolioResult     *resultadoSolicitudNode `xml:"SolicitaDescargaFolioResponse>SolicitaDescargaFolioResult"`
+}
+
+type resultadoSolicitudNode struct {
+	IdSolicitud    string `xml:"IdSolicitud,attr"`
+	RfcSolicitante string `xml:"RfcSolicitante,attr"`
+	CodEstatus     string `xml:"CodEstatus,attr"`
+	Mensaje        string `xml:"Mensaje,attr"`
+}
+
+// HELPER UNIVERSAL PARA SOLICITUDES
+func parseRespuestaSolicitud(xmlData string) (*RespuestaSolicitud, error) {
+	var envelope soapEnvelopeSolicitud
+	if err := xml.Unmarshal([]byte(xmlData), &envelope); err != nil {
+		return nil, err
+	}
+
+	var nodo *resultadoSolicitudNode
+	if envelope.Body.RecibidosResult != nil {
+		nodo = envelope.Body.RecibidosResult
+	} else if envelope.Body.EmitidosResult != nil {
+		nodo = envelope.Body.EmitidosResult
+	} else if envelope.Body.FolioResult != nil {
+		nodo = envelope.Body.FolioResult
+	}
+
+	if nodo == nil {
+		return nil, errors.New("no se encontró el nodo de resultado en la respuesta XML de Solicitud")
+	}
+
+	return &RespuestaSolicitud{
+		IdSolicitud:    nodo.IdSolicitud,
+		RfcSolicitante: nodo.RfcSolicitante,
+		CodEstatus:     nodo.CodEstatus,
+		Mensaje:        nodo.Mensaje,
+	}, nil
+}
+
+//verificacion
+
+type RespuestaVerificacion struct {
+	CodEstatus            string   `json:"cod_estatus"`
+	EstadoSolicitud       string   `json:"estado_solicitud"`
+	CodigoEstadoSolicitud string   `json:"codigo_estado_solicitud"`
+	NumeroCFDIs           string   `json:"numero_cfdis"`
+	Mensaje               string   `json:"mensaje"`
+	IdsPaquetes           []string `json:"ids_paquetes"`
+}
+
+// --- ESTRUCTURAS XML ---
+type soapEnvelopeVerificacion struct {
+	XMLName xml.Name             `xml:"Envelope"`
+	Body    soapBodyVerificacion `xml:"Body"`
+}
+
+type soapBodyVerificacion struct {
+	Result *resultadoVerificacionNode `xml:"VerificaSolicitudDescargaResponse>VerificaSolicitudDescargaResult"`
+}
+
+type resultadoVerificacionNode struct {
+	CodEstatus            string   `xml:"CodEstatus,attr"`
+	EstadoSolicitud       string   `xml:"EstadoSolicitud,attr"`
+	CodigoEstadoSolicitud string   `xml:"CodigoEstadoSolicitud,attr"`
+	NumeroCFDIs           string   `xml:"NumeroCFDIs,attr"`
+	Mensaje               string   `xml:"Mensaje,attr"`
+	IdsPaquetes           []string `xml:"IdsPaquetes>string"` // Extrae cada <string>ID</string>
+}
+
+func parseRespuestaVerificacion(xmlData string) (*RespuestaVerificacion, error) {
+	var envelope soapEnvelopeVerificacion
+	if err := xml.Unmarshal([]byte(xmlData), &envelope); err != nil {
+		return nil, err
+	}
+
+	nodo := envelope.Body.Result
+	if nodo == nil {
+		return nil, errors.New("no se encontró el nodo de resultado en la respuesta XML de Verificación")
+	}
+
+	return &RespuestaVerificacion{
+		CodEstatus:            nodo.CodEstatus,
+		EstadoSolicitud:       nodo.EstadoSolicitud,
+		CodigoEstadoSolicitud: nodo.CodigoEstadoSolicitud,
+		NumeroCFDIs:           nodo.NumeroCFDIs,
+		Mensaje:               nodo.Mensaje,
+		IdsPaquetes:           nodo.IdsPaquetes,
+	}, nil
+}
+
+//descarga
+
+// --- OBJETO LIMPIO PARA TU APP ---
+type RespuestaDescarga struct {
+	CodEstatus string `json:"cod_estatus"`
+	Mensaje    string `json:"mensaje"`
+	PaqueteB64 string `json:"paquete_b64"` // String gigante en Base64 del .zip
+}
+
+// --- ESTRUCTURAS XML ---
+type soapEnvelopeDescarga struct {
+	XMLName xml.Name           `xml:"Envelope"`
+	Header  soapHeaderDescarga `xml:"Header"`
+	Body    soapBodyDescarga   `xml:"Body"`
+}
+
+type soapHeaderDescarga struct {
+	Respuesta *headerRespuestaDescarga `xml:"respuesta"`
+}
+
+type headerRespuestaDescarga struct {
+	CodEstatus string `xml:"CodEstatus,attr"`
+	Mensaje    string `xml:"Mensaje,attr"`
+}
+
+type soapBodyDescarga struct {
+	Paquete string `xml:"RespuestaDescargaMasivaTercerosSalida>Paquete"`
+}
+
+// HELPER
+func parseRespuestaDescarga(xmlData string) (*RespuestaDescarga, error) {
+	var envelope soapEnvelopeDescarga
+	if err := xml.Unmarshal([]byte(xmlData), &envelope); err != nil {
+		return nil, err
+	}
+
+	// El SAT a veces omite el Header si ocurre un error grave en la petición
+	estatus := ""
+	mensaje := ""
+	if envelope.Header.Respuesta != nil {
+		estatus = envelope.Header.Respuesta.CodEstatus
+		mensaje = envelope.Header.Respuesta.Mensaje
+	}
+
+	// Si no viene paquete (ej. error 5000) el string será vacío
+	paquete := envelope.Body.Paquete
+
+	if estatus == "" && paquete == "" {
+		return nil, errors.New("no se pudo parsear ni el header ni el paquete de descarga")
+	}
+
+	return &RespuestaDescarga{
+		CodEstatus: estatus,
+		Mensaje:    mensaje,
+		PaqueteB64: paquete,
+	}, nil
 }
