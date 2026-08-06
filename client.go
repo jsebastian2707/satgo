@@ -38,6 +38,10 @@ func newClient(cert *x509.Certificate, key *rsa.PrivateKey, rfc string) *Client 
 	}
 }
 
+func NewClientFromParsed(cert *x509.Certificate, key *rsa.PrivateKey, rfc string) *Client {
+	return newClient(cert, key, rfc)
+}
+
 func NewClientFromPEM(certPEM, keyPEM []byte, rfc string) (*Client, error) {
 
 	certBlock, _ := pem.Decode(certPEM)
@@ -114,6 +118,16 @@ func parseCertificateDER(data []byte) (*x509.Certificate, error) {
 
 func (c *Client) RFC() string {
 	return c.credentials.RFC
+}
+
+func (c *Client) Autenticar() (string, error) {
+	token, _, err := c.autenticar()
+	if err != nil {
+		return "", err
+	}
+	c.token = token
+	c.expiresAt = time.Now().UTC().Add(5 * time.Minute)
+	return token, nil
 }
 
 func (c *Client) autenticar() (string, time.Time, error) {
@@ -383,7 +397,6 @@ func (c *Client) Verificacion(idSolicitud string, rfcSolicitante string) (*Respu
 
 	// 6. Envoltorio SOAP (El primer parámetro es el nombre del nodo principal)
 	soapFinal := buildSoapEnvelope("VerificaSolicitudDescarga", nodoSolicitud, "des:solicitud", signedInfo, signatureValue, certBase64, issuerName, serialNumber)
-
 	// 7. Enviar petición al endpoint de Verificación
 	urlSAT := "https://cfdidescargamasivasolicitud.clouda.sat.gob.mx/VerificaSolicitudDescargaService.svc"
 	soapAction := "http://DescargaMasivaTerceros.sat.gob.mx/IVerificaSolicitudDescargaService/VerificaSolicitudDescarga"
@@ -442,7 +455,6 @@ func (c *Client) Descarga(idPaquete string, rfcSolicitante string) (*RespuestaDe
 	if err != nil {
 		return nil, fmt.Errorf("error en la solicitud al SAT: %w", err)
 	}
-
 	return parseRespuestaDescarga(respuestaXML)
 }
 

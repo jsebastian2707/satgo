@@ -151,8 +151,9 @@ func (c *Client) enviarPeticionDescarga(soapBody string) (string, error) {
 		return "", fmt.Errorf("error creando request: %v", err)
 	}
 
-	// Headers estándar + El Token de autorización que se generó automáticamente
-	req.Header.Set("Accept-Encoding", "gzip,deflate")
+	// ELIMINADA: req.Header.Set("Accept-Encoding", "gzip,deflate")
+	// Go se encargará automáticamente de pedir y descomprimir gzip.
+
 	req.Header.Set("Content-Type", "text/xml; charset=utf-8")
 	req.Header.Set("SOAPAction", "http://DescargaMasivaTerceros.sat.gob.mx/IDescargaMasivaTercerosService/Descargar")
 	req.Header.Set("Authorization", c.token)
@@ -190,7 +191,7 @@ type soapEnvelopeSolicitud struct {
 type soapBodySolicitud struct {
 	// Ahora atrapa la respuesta de cualquiera de los 3 métodos
 	RecibidosResult *resultadoSolicitudNode `xml:"SolicitaDescargaRecibidosResponse>SolicitaDescargaRecibidosResult"`
-	EmitidosResult  *resultadoSolicitudNode `xml:"SolicitaDescargaResponse>SolicitaDescargaResult"`
+	EmitidosResult  *resultadoSolicitudNode `xml:"SolicitaDescargaEmitidosResponse>SolicitaDescargaEmitidosResult"`
 	FolioResult     *resultadoSolicitudNode `xml:"SolicitaDescargaFolioResponse>SolicitaDescargaFolioResult"`
 }
 
@@ -256,7 +257,7 @@ type resultadoVerificacionNode struct {
 	CodigoEstadoSolicitud string   `xml:"CodigoEstadoSolicitud,attr"`
 	NumeroCFDIs           string   `xml:"NumeroCFDIs,attr"`
 	Mensaje               string   `xml:"Mensaje,attr"`
-	IdsPaquetes           []string `xml:"IdsPaquetes>string"` // Extrae cada <string>ID</string>
+	IdsPaquetes           []string `xml:"IdsPaquetes"` // Extrae cada <string>ID</string>
 }
 
 func parseRespuestaVerificacion(xmlData string) (*RespuestaVerificacion, error) {
@@ -297,6 +298,7 @@ type soapEnvelopeDescarga struct {
 }
 
 type soapHeaderDescarga struct {
+	// Notar "respuesta" con minúscula según tu XML: <h:respuesta .../>
 	Respuesta *headerRespuestaDescarga `xml:"respuesta"`
 }
 
@@ -306,17 +308,32 @@ type headerRespuestaDescarga struct {
 }
 
 type soapBodyDescarga struct {
+	// Notar "RespuestaDescargaMasivaTercerosSalida" según tu XML
 	Paquete string `xml:"RespuestaDescargaMasivaTercerosSalida>Paquete"`
 }
 
 // HELPER
 func parseRespuestaDescarga(xmlData string) (*RespuestaDescarga, error) {
-	var envelope soapEnvelopeDescarga
-	if err := xml.Unmarshal([]byte(xmlData), &envelope); err != nil {
-		return nil, err
+	// 1. Limpiamos espacios y caracteres de control invisibles al inicio y final
+	xmlClean := strings.TrimSpace(xmlData)
+
+	// 2. Si hay basura binaria antes del primer '<', la descartamos
+	if idx := strings.Index(xmlClean, "<"); idx > 0 {
+		xmlClean = xmlClean[idx:]
 	}
 
-	// El SAT a veces omite el Header si ocurre un error grave en la petición
+	var envelope soapEnvelopeDescarga
+
+	// 3. Decodificamos el XML ya limpio
+	decoder := xml.NewDecoder(strings.NewReader(xmlClean))
+	decoder.Strict = false
+	decoder.Entity = xml.HTMLEntity
+
+	err := decoder.Decode(&envelope)
+	if err != nil {
+		return nil, fmt.Errorf("error al decodificar XML de descarga: %w", err)
+	}
+
 	estatus := ""
 	mensaje := ""
 	if envelope.Header.Respuesta != nil {
@@ -324,11 +341,10 @@ func parseRespuestaDescarga(xmlData string) (*RespuestaDescarga, error) {
 		mensaje = envelope.Header.Respuesta.Mensaje
 	}
 
-	// Si no viene paquete (ej. error 5000) el string será vacío
 	paquete := envelope.Body.Paquete
 
 	if estatus == "" && paquete == "" {
-		return nil, errors.New("no se pudo parsear ni el header ni el paquete de descarga")
+		return nil, errors.New("no se pudo extraer el paquete ni el estatus de la respuesta de descarga")
 	}
 
 	return &RespuestaDescarga{
